@@ -50,7 +50,7 @@
 - [x] **Phase 4:** Environment Filters (Ghost/Psychic grayscale modes).
 - [x] **Phase 5:** Web Audio API integration for spatial sound effects.
 - [x] **Phase 6:** Capture Engine (Canvas-to-Image export).
-
+- [x] **Phase 7:** implement dual-camera toggling and mobile responsive scroll dock.
 ---
 
 ## 🏃‍♂️ Installation & Local Setup

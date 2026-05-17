@@ -90,12 +90,11 @@ function App() {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const [pokemonType, setPokemonType] = useState('fire');
+  const [facingMode, setFacingMode] = useState('user'); // 'user' (front) or 'environment' (back)
   const particles = useRef([]);
   const isCurrentlyPinching = useRef(false);
-  const wasPinching = useRef(false); // Tracks state change framework-side to prevent sound stutters
+  const wasPinching = useRef(false);
   const lastCoordinates = useRef({ x: 0, y: 0 });
-  
-  // Audio Graph Instantiation Ref
   const audioCtx = useRef(null);
 
   const typeConfig = {
@@ -109,7 +108,6 @@ function App() {
     rock: { color: '#8B4513', label: '🪨 Rock' }
   };
 
-  // --- AUDIO SYNTHESIS NODE METHOD ROUTINES ---
   const playChargeSound = () => {
     if (!audioCtx.current) {
       audioCtx.current = new (window.AudioContext || window.webkitAudioContext)();
@@ -117,12 +115,10 @@ function App() {
     if (audioCtx.current.state === 'suspended') {
       audioCtx.current.resume();
     }
-
     const ctx = audioCtx.current;
     const osc = ctx.createOscillator();
     const gainNode = ctx.createGain();
 
-    // Pure charging energy curve synthesis
     osc.type = 'sine';
     osc.frequency.setValueAtTime(160, ctx.currentTime);
     osc.frequency.exponentialRampToValueAtTime(480, ctx.currentTime + 0.4);
@@ -133,7 +129,6 @@ function App() {
 
     osc.connect(gainNode);
     gainNode.connect(ctx.destination);
-
     osc.start();
     osc.stop(ctx.currentTime + 0.4);
   };
@@ -141,8 +136,6 @@ function App() {
   const playAttackSound = () => {
     if (!audioCtx.current) return;
     const ctx = audioCtx.current;
-
-    // Allocate procedural noise buffer configuration
     const bufferSize = ctx.sampleRate * 0.35; 
     const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
     const dataArray = buffer.getChannelData(0);
@@ -153,14 +146,12 @@ function App() {
 
     const noiseNode = ctx.createBufferSource();
     noiseNode.buffer = buffer;
-
     const gainNode = ctx.createGain();
     gainNode.gain.setValueAtTime(0.25, ctx.currentTime);
     gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
 
     noiseNode.connect(gainNode);
     gainNode.connect(ctx.destination);
-
     noiseNode.start();
     noiseNode.stop(ctx.currentTime + 0.35);
   };
@@ -168,6 +159,7 @@ function App() {
   useEffect(() => {
     let handLandmarker;
     let animationId;
+    let currentStream = null;
 
     const setupApp = async () => {
       const vision = await FilesetResolver.forVisionTasks(
@@ -183,10 +175,17 @@ function App() {
         numHands: 1,
       });
 
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play();
+      // Fetch stream dynamically based on selected facingMode state
+      try {
+        currentStream = await navigator.mediaDevices.getUserMedia({ 
+          video: { facingMode: facingMode } 
+        });
+        if (videoRef.current) {
+          videoRef.current.srcObject = currentStream;
+          videoRef.current.play();
+        }
+      } catch (err) {
+        console.error("Camera access error: ", err);
       }
 
       renderLoop();
@@ -224,7 +223,10 @@ function App() {
           const thumbTip = landmarks[4];
           const indexFinger = landmarks[8];
           
-          const px = (1 - indexFinger.x) * canvas.width;
+          // MAPPING CONDITIONAL: Only invert horizontal alignment if we are mirroring (front camera)
+          const px = facingMode === 'user' 
+            ? (1 - indexFinger.x) * canvas.width 
+            : indexFinger.x * canvas.width;
           const py = indexFinger.y * canvas.height;
           
           lastCoordinates.current = { x: px, y: py };
@@ -234,7 +236,6 @@ function App() {
           isCurrentlyPinching.current = isPinching;
 
           if (isPinching) {
-            // Trigger sound on initial gesture state mutation boundary
             if (!wasPinching.current) {
               playChargeSound();
             }
@@ -242,7 +243,6 @@ function App() {
               particles.current.push(new Particle(px, py, pokemonType, typeConfig[pokemonType].color, true));
             }
           } else {
-            // Trigger explosion noise if user releases a pinch charge configuration
             if (wasPinching.current) {
               playAttackSound();
             }
@@ -251,7 +251,6 @@ function App() {
               particles.current.push(new Particle(px, py, pokemonType, typeConfig[pokemonType].color, false));
             }
           }
-          // Update tracking edge logic ref
           wasPinching.current = isPinching;
         } else {
           isCurrentlyPinching.current = false;
@@ -286,8 +285,11 @@ function App() {
     return () => {
       cancelAnimationFrame(animationId);
       if (handLandmarker) handLandmarker.close();
+      if (currentStream) {
+        currentStream.getTracks().forEach(track => track.stop()); // Clean up camera streams on switch
+      }
     };
-  }, [pokemonType]);
+  }, [pokemonType, facingMode]); // Triggers effect re-run when camera changes
 
   const captureScreenshot = () => {
     const video = videoRef.current;
@@ -300,8 +302,11 @@ function App() {
     const mCtx = mergedCanvas.getContext('2d');
 
     mCtx.save();
-    mCtx.translate(mergedCanvas.width, 0);
-    mCtx.scale(-1, 1);
+    // Only apply canvas mirror mapping if capturing the front user facing track
+    if (facingMode === 'user') {
+      mCtx.translate(mergedCanvas.width, 0);
+      mCtx.scale(-1, 1);
+    }
     mCtx.drawImage(video, 0, 0, mergedCanvas.width, mergedCanvas.height);
     mCtx.restore();
 
@@ -330,6 +335,10 @@ function App() {
     link.click();
   };
 
+  const toggleCamera = () => {
+    setFacingMode(prev => prev === 'user' ? 'environment' : 'user');
+  };
+
   return (
     <div className="relative w-screen h-screen bg-black overflow-hidden flex flex-col items-center">
       <video 
@@ -337,7 +346,8 @@ function App() {
         className={`absolute top-0 left-0 w-full h-full object-cover transition-all duration-700 ${
           (pokemonType === 'ghost' || pokemonType === 'psychic') ? 'brightness-50 grayscale contrast-125' : 'brightness-100'
         }`} 
-        style={{ transform: 'scaleX(-1)' }} 
+        // Style condition: Only flip video element if front camera is active
+        style={{ transform: facingMode === 'user' ? 'scaleX(-1)' : 'scaleX(1)' }} 
         playsInline 
       />
 
@@ -346,29 +356,40 @@ function App() {
         className="absolute top-0 left-0 w-full h-full pointer-events-none z-20" 
       />
 
-      <div className="absolute top-6 right-6 z-50">
+      {/* Top Controls Layout (Responsive spacing) */}
+      <div className="absolute top-4 left-4 right-4 flex justify-between items-center z-50">
+        <button
+          onClick={toggleCamera}
+          className="bg-black/60 hover:bg-black/80 text-white font-bold py-2 px-4 rounded-xl shadow-xl backdrop-blur-md transition-all text-xs md:text-sm active:scale-95 border border-white/10"
+        >
+          🔄 Flip Camera
+        </button>
+        
         <button
           onClick={captureScreenshot}
-          className="bg-white text-black hover:bg-gray-100 font-bold py-2.5 px-5 rounded-xl shadow-2xl transition-all flex items-center gap-2 tracking-wide text-sm active:scale-95 border border-white/40"
+          className="bg-white text-black hover:bg-gray-100 font-bold py-2 px-4 rounded-xl shadow-xl transition-all text-xs md:text-sm active:scale-95 border border-white/40"
         >
-          📸 Capture Attack
+          📸 Capture
         </button>
       </div>
       
-      <div className="absolute bottom-8 grid grid-cols-2 md:grid-cols-4 gap-3 z-50 w-full max-w-2xl px-6">
-        {Object.keys(typeConfig).map((type) => (
-          <button 
-            key={type}
-            onClick={() => setPokemonType(type)}
-            className={`py-3 px-2 rounded-xl border text-sm font-bold transition-all shadow-lg backdrop-blur-md ${
-              pokemonType === type 
-              ? 'bg-white text-black scale-110 shadow-[0_0_20px_white]' 
-              : 'bg-black/40 text-white border-white/20 hover:bg-black/60'
-            }`}
-          >
-            {typeConfig[type].label}
-          </button>
-        ))}
+      {/* Dynamic Selector Dock: Scrolls smoothly horizontally on small mobile devices */}
+      <div className="absolute bottom-6 left-0 right-0 z-50 w-full px-4 overflow-x-auto no-scrollbar flex justify-start md:justify-center gap-3 py-2">
+        <div className="flex gap-2 min-w-max mx-auto">
+          {Object.keys(typeConfig).map((type) => (
+            <button 
+              key={type}
+              onClick={() => setPokemonType(type)}
+              className={`py-2.5 px-4 rounded-xl border text-xs md:text-sm font-bold transition-all shadow-md backdrop-blur-sm ${
+                pokemonType === type 
+                ? 'bg-white text-black scale-105 shadow-[0_0_15px_white]' 
+                : 'bg-black/50 text-white border-white/10 hover:bg-black/70'
+              }`}
+            >
+              {typeConfig[type].label}
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );
