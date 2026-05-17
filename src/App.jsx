@@ -91,9 +91,12 @@ function App() {
   const canvasRef = useRef(null);
   const [pokemonType, setPokemonType] = useState('fire');
   const particles = useRef([]);
-  // Track pinching state globally in a ref so the screenshot tool can read it instantly
   const isCurrentlyPinching = useRef(false);
+  const wasPinching = useRef(false); // Tracks state change framework-side to prevent sound stutters
   const lastCoordinates = useRef({ x: 0, y: 0 });
+  
+  // Audio Graph Instantiation Ref
+  const audioCtx = useRef(null);
 
   const typeConfig = {
     fire: { color: '#FF4500', label: '🔥 Fire' },
@@ -104,6 +107,62 @@ function App() {
     psychic: { color: '#FF69B4', label: '🔮 Psychic' },
     fairy: { color: '#FFB6C1', label: '✨ Fairy' },
     rock: { color: '#8B4513', label: '🪨 Rock' }
+  };
+
+  // --- AUDIO SYNTHESIS NODE METHOD ROUTINES ---
+  const playChargeSound = () => {
+    if (!audioCtx.current) {
+      audioCtx.current = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (audioCtx.current.state === 'suspended') {
+      audioCtx.current.resume();
+    }
+
+    const ctx = audioCtx.current;
+    const osc = ctx.createOscillator();
+    const gainNode = ctx.createGain();
+
+    // Pure charging energy curve synthesis
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(160, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(480, ctx.currentTime + 0.4);
+
+    gainNode.gain.setValueAtTime(0, ctx.currentTime);
+    gainNode.gain.linearRampToValueAtTime(0.2, ctx.currentTime + 0.04);
+    gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+
+    osc.connect(gainNode);
+    gainNode.connect(ctx.destination);
+
+    osc.start();
+    osc.stop(ctx.currentTime + 0.4);
+  };
+
+  const playAttackSound = () => {
+    if (!audioCtx.current) return;
+    const ctx = audioCtx.current;
+
+    // Allocate procedural noise buffer configuration
+    const bufferSize = ctx.sampleRate * 0.35; 
+    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const dataArray = buffer.getChannelData(0);
+    
+    for (let i = 0; i < bufferSize; i++) {
+      dataArray[i] = Math.random() * 2 - 1; 
+    }
+
+    const noiseNode = ctx.createBufferSource();
+    noiseNode.buffer = buffer;
+
+    const gainNode = ctx.createGain();
+    gainNode.gain.setValueAtTime(0.25, ctx.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
+
+    noiseNode.connect(gainNode);
+    gainNode.connect(ctx.destination);
+
+    noiseNode.start();
+    noiseNode.stop(ctx.currentTime + 0.35);
   };
 
   useEffect(() => {
@@ -171,27 +230,35 @@ function App() {
           lastCoordinates.current = { x: px, y: py };
 
           const distance = getDistance(thumbTip, indexFinger);
-          // Increased threshold to 0.12 to make it easier to trigger across varying laptop webcams
           const isPinching = distance < 0.12; 
           isCurrentlyPinching.current = isPinching;
 
           if (isPinching) {
-            // Add tight particles
+            // Trigger sound on initial gesture state mutation boundary
+            if (!wasPinching.current) {
+              playChargeSound();
+            }
             for (let i = 0; i < 6; i++) {
               particles.current.push(new Particle(px, py, pokemonType, typeConfig[pokemonType].color, true));
             }
           } else {
+            // Trigger explosion noise if user releases a pinch charge configuration
+            if (wasPinching.current) {
+              playAttackSound();
+            }
             const count = (pokemonType === 'ghost' || pokemonType === 'psychic') ? 30 : 20;
             for (let i = 0; i < count; i++) {
               particles.current.push(new Particle(px, py, pokemonType, typeConfig[pokemonType].color, false));
             }
           }
+          // Update tracking edge logic ref
+          wasPinching.current = isPinching;
         } else {
           isCurrentlyPinching.current = false;
+          wasPinching.current = false;
         }
       }
 
-      // Render the particles using additive blending for glowing effect
       ctx.globalCompositeOperation = 'lighter';
       particles.current.forEach((p, index) => {
         p.update();
@@ -199,10 +266,9 @@ function App() {
         if (p.opacity <= 0) particles.current.splice(index, 1);
       });
 
-      // Explicitly draw the solid orb overlay on top of particles so it doesn't get wiped or blended away
       if (isCurrentlyPinching.current) {
         ctx.save();
-        ctx.globalCompositeOperation = 'source-over'; // Keeps it perfectly solid white
+        ctx.globalCompositeOperation = 'source-over'; 
         ctx.beginPath();
         ctx.arc(lastCoordinates.current.x, lastCoordinates.current.y, 18, 0, Math.PI * 2);
         ctx.fillStyle = "white";
@@ -223,7 +289,6 @@ function App() {
     };
   }, [pokemonType]);
 
-  // --- PERFECT COMPOSITE SCREENSHOT CAPTURE ---
   const captureScreenshot = () => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -234,24 +299,20 @@ function App() {
     mergedCanvas.height = canvas.height;
     const mCtx = mergedCanvas.getContext('2d');
 
-    // 1. Draw mirrored background video stream track
     mCtx.save();
     mCtx.translate(mergedCanvas.width, 0);
     mCtx.scale(-1, 1);
     mCtx.drawImage(video, 0, 0, mergedCanvas.width, mergedCanvas.height);
     mCtx.restore();
 
-    // 2. If Ghost/Psychic ambient dim themes are active, layer it on the capture canvas
     if (pokemonType === 'ghost' || pokemonType === 'psychic') {
       mCtx.fillStyle = 'rgba(0, 0, 0, 0.7)'; 
       mCtx.fillRect(0, 0, mergedCanvas.width, mergedCanvas.height);
     }
 
-    // 3. Enforce additive composite operations to accurately clone the active glow engine
     mCtx.globalCompositeOperation = 'lighter';
     mCtx.drawImage(canvas, 0, 0);
 
-    // 4. Manually re-draw the solid core orb if screenshot happens during a pinch state
     if (isCurrentlyPinching.current) {
       mCtx.globalCompositeOperation = 'source-over';
       mCtx.beginPath();
@@ -262,7 +323,6 @@ function App() {
       mCtx.fill();
     }
 
-    // 5. Fire instant download trigger
     const imageURL = mergedCanvas.toDataURL('image/png');
     const link = document.createElement('a');
     link.download = `pokemotion-${pokemonType}-${Date.now()}.png`;
