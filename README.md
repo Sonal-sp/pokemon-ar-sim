@@ -49,7 +49,7 @@
 - [x] **Phase 3:** Pinch Gesture Recognition & "Charge" states.
 - [x] **Phase 4:** Environment Filters (Ghost/Psychic grayscale modes).
 - [ ] **Phase 5:** **(Upcoming)** Web Audio API integration for spatial sound effects.
-- [ ] **Phase 6:** **(Upcoming)** Capture Engine (Canvas-to-Image export).
+- [x] **Phase 6:** Capture Engine (Canvas-to-Image export).
 
 ---
 

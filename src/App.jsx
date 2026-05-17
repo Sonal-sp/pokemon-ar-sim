@@ -11,7 +11,6 @@ class Particle {
     this.opacity = 1;
     
     const angle = Math.random() * Math.PI * 2;
-    // Faster release, tighter charging
     const force = isCharging ? (Math.random() * 1.5 + 0.5) : (Math.random() * 7 + 4);
     
     this.speedX = Math.cos(angle) * force;
@@ -65,6 +64,7 @@ class Particle {
   }
 
   draw(ctx) {
+    ctx.save();
     ctx.globalAlpha = this.opacity;
     ctx.fillStyle = this.color;
     ctx.shadowBlur = 15;
@@ -78,7 +78,7 @@ class Particle {
     }
     
     ctx.fill();
-    ctx.shadowBlur = 0;
+    ctx.restore();
   }
 }
 
@@ -91,6 +91,9 @@ function App() {
   const canvasRef = useRef(null);
   const [pokemonType, setPokemonType] = useState('fire');
   const particles = useRef([]);
+  // Track pinching state globally in a ref so the screenshot tool can read it instantly
+  const isCurrentlyPinching = useRef(false);
+  const lastCoordinates = useRef({ x: 0, y: 0 });
 
   const typeConfig = {
     fire: { color: '#FF4500', label: '🔥 Fire' },
@@ -139,9 +142,8 @@ function App() {
       }
 
       const ctx = canvas.getContext('2d');
-      
-      // FIX: Get the actual visible dimensions of the video on screen
       const rect = video.getBoundingClientRect();
+      
       if (canvas.width !== rect.width || canvas.height !== rect.height) {
         canvas.width = rect.width;
         canvas.height = rect.height;
@@ -156,8 +158,6 @@ function App() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
       }
 
-      ctx.globalCompositeOperation = 'lighter';
-
       if (video.readyState >= 2) {
         const results = handLandmarker.detectForVideo(video, performance.now());
         if (results.landmarks && results.landmarks.length > 0) {
@@ -165,40 +165,52 @@ function App() {
           const thumbTip = landmarks[4];
           const indexFinger = landmarks[8];
           
-          // MAPPING FIX: Use the Canvas width/height which are now synced to the video's CSS size
           const px = (1 - indexFinger.x) * canvas.width;
           const py = indexFinger.y * canvas.height;
+          
+          lastCoordinates.current = { x: px, y: py };
 
           const distance = getDistance(thumbTip, indexFinger);
-          const isPinching = distance < 0.08; 
+          // Increased threshold to 0.12 to make it easier to trigger across varying laptop webcams
+          const isPinching = distance < 0.12; 
+          isCurrentlyPinching.current = isPinching;
 
           if (isPinching) {
-            // CHARGING VISUAL
-            ctx.beginPath();
-            ctx.arc(px, py, 18, 0, Math.PI * 2);
-            ctx.fillStyle = "white";
-            ctx.shadowBlur = 45;
-            ctx.shadowColor = typeConfig[pokemonType].color;
-            ctx.fill();
-            
+            // Add tight particles
             for (let i = 0; i < 6; i++) {
               particles.current.push(new Particle(px, py, pokemonType, typeConfig[pokemonType].color, true));
             }
           } else {
-            // ATTACK VISUAL
             const count = (pokemonType === 'ghost' || pokemonType === 'psychic') ? 30 : 20;
             for (let i = 0; i < count; i++) {
               particles.current.push(new Particle(px, py, pokemonType, typeConfig[pokemonType].color, false));
             }
           }
+        } else {
+          isCurrentlyPinching.current = false;
         }
       }
 
+      // Render the particles using additive blending for glowing effect
+      ctx.globalCompositeOperation = 'lighter';
       particles.current.forEach((p, index) => {
         p.update();
         p.draw(ctx);
         if (p.opacity <= 0) particles.current.splice(index, 1);
       });
+
+      // Explicitly draw the solid orb overlay on top of particles so it doesn't get wiped or blended away
+      if (isCurrentlyPinching.current) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'source-over'; // Keeps it perfectly solid white
+        ctx.beginPath();
+        ctx.arc(lastCoordinates.current.x, lastCoordinates.current.y, 18, 0, Math.PI * 2);
+        ctx.fillStyle = "white";
+        ctx.shadowBlur = 45;
+        ctx.shadowColor = typeConfig[pokemonType].color;
+        ctx.fill();
+        ctx.restore();
+      }
 
       animationId = requestAnimationFrame(renderLoop);
     };
@@ -210,6 +222,53 @@ function App() {
       if (handLandmarker) handLandmarker.close();
     };
   }, [pokemonType]);
+
+  // --- PERFECT COMPOSITE SCREENSHOT CAPTURE ---
+  const captureScreenshot = () => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas) return;
+
+    const mergedCanvas = document.createElement('canvas');
+    mergedCanvas.width = canvas.width;
+    mergedCanvas.height = canvas.height;
+    const mCtx = mergedCanvas.getContext('2d');
+
+    // 1. Draw mirrored background video stream track
+    mCtx.save();
+    mCtx.translate(mergedCanvas.width, 0);
+    mCtx.scale(-1, 1);
+    mCtx.drawImage(video, 0, 0, mergedCanvas.width, mergedCanvas.height);
+    mCtx.restore();
+
+    // 2. If Ghost/Psychic ambient dim themes are active, layer it on the capture canvas
+    if (pokemonType === 'ghost' || pokemonType === 'psychic') {
+      mCtx.fillStyle = 'rgba(0, 0, 0, 0.7)'; 
+      mCtx.fillRect(0, 0, mergedCanvas.width, mergedCanvas.height);
+    }
+
+    // 3. Enforce additive composite operations to accurately clone the active glow engine
+    mCtx.globalCompositeOperation = 'lighter';
+    mCtx.drawImage(canvas, 0, 0);
+
+    // 4. Manually re-draw the solid core orb if screenshot happens during a pinch state
+    if (isCurrentlyPinching.current) {
+      mCtx.globalCompositeOperation = 'source-over';
+      mCtx.beginPath();
+      mCtx.arc(lastCoordinates.current.x, lastCoordinates.current.y, 18, 0, Math.PI * 2);
+      mCtx.fillStyle = "white";
+      mCtx.shadowBlur = 45;
+      mCtx.shadowColor = typeConfig[pokemonType].color;
+      mCtx.fill();
+    }
+
+    // 5. Fire instant download trigger
+    const imageURL = mergedCanvas.toDataURL('image/png');
+    const link = document.createElement('a');
+    link.download = `pokemotion-${pokemonType}-${Date.now()}.png`;
+    link.href = imageURL;
+    link.click();
+  };
 
   return (
     <div className="relative w-screen h-screen bg-black overflow-hidden flex flex-col items-center">
@@ -226,13 +285,22 @@ function App() {
         ref={canvasRef} 
         className="absolute top-0 left-0 w-full h-full pointer-events-none z-20" 
       />
+
+      <div className="absolute top-6 right-6 z-50">
+        <button
+          onClick={captureScreenshot}
+          className="bg-white text-black hover:bg-gray-100 font-bold py-2.5 px-5 rounded-xl shadow-2xl transition-all flex items-center gap-2 tracking-wide text-sm active:scale-95 border border-white/40"
+        >
+          📸 Capture Attack
+        </button>
+      </div>
       
       <div className="absolute bottom-8 grid grid-cols-2 md:grid-cols-4 gap-3 z-50 w-full max-w-2xl px-6">
         {Object.keys(typeConfig).map((type) => (
           <button 
             key={type}
             onClick={() => setPokemonType(type)}
-            className={`py-3 px-2 rounded-xl border text-sm font-bold transition-all shadow-xl backdrop-blur-md ${
+            className={`py-3 px-2 rounded-xl border text-sm font-bold transition-all shadow-lg backdrop-blur-md ${
               pokemonType === type 
               ? 'bg-white text-black scale-110 shadow-[0_0_20px_white]' 
               : 'bg-black/40 text-white border-white/20 hover:bg-black/60'
