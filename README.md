@@ -1,7 +1,7 @@
 # ⚡ PokéMotion AR: Real-Time Gesture-Driven Elemental Simulator
 
 > **Project Status:** 🚧 **Active Development (WIP)**  
-> *Current Phase: Gesture Logic Integration & Physical Property Simulation*
+> *Current Phase:  Web Audio API integration for spatial sound effects.*
 
 **PokéMotion AR** is a high-performance Augmented Reality (AR) web application that translates human hand gestures into dynamic elemental animations. By merging **Computer Vision (AI)** with a custom-built **Particle Physics Engine**, the application allows users to "bend" elements like Fire, Electricity, and Water in real-time.
 
