@@ -5,7 +5,7 @@
 
 **PokéMotion AR** is a high-performance Augmented Reality (AR) web application that translates human hand gestures into dynamic elemental animations. By merging **Computer Vision (AI)** with a custom-built **Particle Physics Engine**, the application allows users to "bend" elements like Fire, Electricity, and Water in real-time.
 
-**THE LIVE LINK OF THE PROJECT WILL BE DISPLAYED WHEN THE PROJECT GETS COMPLETED AND GETS FULLY DEVERLOPED.**
+**THE LIVE LINK OF THE PROJECT WILL BE DISPLAYED WHEN THE PROJECT GETS COMPLETED AND GETS FULLY DEVELOPED.**
 ---
 
 ## 🚀 Technical Highlights
